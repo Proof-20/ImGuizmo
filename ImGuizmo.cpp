@@ -48,6 +48,9 @@ namespace IMGUIZMO_NAMESPACE
    static const float RAD2DEG = (180.f / ZPI);
    static const float DEG2RAD = (ZPI / 180.f);
    const float screenRotateSize = 0.06f;
+   const float screenRotateDisplayFactor = 1.20f;
+   const float screenRotateHitHalfWidth = 6.0f;
+
    // scale a bit so translate axis do not touch when in universal
    const float rotationDisplayFactor = 1.2f;
 
@@ -1333,6 +1336,10 @@ namespace IMGUIZMO_NAMESPACE
             gContext.mRadiusSquareCenter = radiusAxis;
          }
       }
+
+      if (hasRSC)
+         gContext.mRadiusSquareCenter *= screenRotateDisplayFactor;
+
       if(hasRSC && (!gContext.mbUsing || type == MT_ROTATE_SCREEN) && (!isMultipleAxesMasked && isNoAxesMasked))
       {
          drawList->AddCircle(worldToPos(gContext.mModel.v.position, gContext.mViewProjection), gContext.mRadiusSquareCenter, colors[0], 64, gContext.mStyle.RotationOuterLineThickness);
@@ -2033,7 +2040,7 @@ namespace IMGUIZMO_NAMESPACE
 
       vec_t deltaScreen = { io.MousePos.x - gContext.mScreenSquareCenter.x, io.MousePos.y - gContext.mScreenSquareCenter.y, 0.f, 0.f };
       float dist = deltaScreen.Length();
-      if (Intersects(op, ROTATE_SCREEN) && dist >= (gContext.mRadiusSquareCenter - 4.0f) && dist < (gContext.mRadiusSquareCenter + 4.0f))
+      if (Intersects(op, ROTATE_SCREEN) && dist >= (gContext.mRadiusSquareCenter - screenRotateHitHalfWidth) && dist < (gContext.mRadiusSquareCenter + screenRotateHitHalfWidth))
       {
          if (!isNoAxesMasked)
             return MT_NONE;
@@ -2223,6 +2230,13 @@ namespace IMGUIZMO_NAMESPACE
 
          const matrix_t res = gContext.mModelSource * deltaMatrixTranslation;
          *(matrix_t*)matrix = res;
+
+         // ReaverEngine: when the caller anchors translation to the drag-start
+         // matrix for stable small-distance drags, the solved output position
+         // must still be reflected in ImGuizmo's draw state. Otherwise the
+         // built-in translation label remains at 0.000 during the drag.
+         gContext.mModel.v.position = res.v.position;
+         gContext.mModelLocal.v.position = res.v.position;
 
          if (!io.MouseDown[0])
          {
