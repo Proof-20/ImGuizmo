@@ -2870,6 +2870,163 @@ namespace IMGUIZMO_NAMESPACE
       return radius < pixelRadius;
    }
 
+   static void DrawManipulationFeedback()
+   {
+      if (!gContext.mbUsing || gContext.GetCurrentID() != gContext.mEditingID || !ImGui::IsMousePosValid())
+         return;
+
+      const int type = gContext.mCurrentOperation;
+      const bool radial = IsRotateType(type) || IsScaleType(type);
+
+      if (!radial && !IsTranslateType(type))
+         return;
+
+      const ImVec2 mouse = ImGui::GetIO().MousePos;
+
+      vec_t pivotClip;
+      pivotClip.TransformPoint(gContext.mModel.v.position, gContext.mViewProjection);
+
+      if (!std::isfinite(pivotClip.w) || pivotClip.w <= FLT_EPSILON)
+         return;
+
+      const ImVec2 pivot = worldToPos(gContext.mModel.v.position, gContext.mViewProjection);
+
+      const double deltaX = static_cast<double>(mouse.x) - pivot.x;
+      const double deltaY = static_cast<double>(mouse.y) - pivot.y;
+      const double distance = std::hypot(deltaX, deltaY);
+
+      if (!std::isfinite(distance))
+         return;
+
+      const float iconSize = gContext.mStyle.ManipulationIconSize;
+
+      if (!std::isfinite(iconSize) || iconSize <= 0.f)
+         return;
+
+      const float halfSize = iconSize * 0.5f;
+      ImDrawList* drawList = gContext.mDrawList;
+
+      // Leave room for the rotated icon at the cursor.
+      const float iconRadius = halfSize * sqrtf(2.f);
+
+      if (radial && distance > iconRadius + 2.f)
+      {
+         const ImVec2 clipMin = ImMax(drawList->GetClipRectMin(), ImVec2(gContext.mX, gContext.mY));
+         const ImVec2 clipMax = ImMin(drawList->GetClipRectMax(), ImVec2(gContext.mXMax, gContext.mYMax));
+
+         const double origin[2] = {pivot.x, pivot.y};
+         const double direction[2] = {deltaX / distance, deltaY / distance};
+
+         const double minimum[2] = {clipMin.x, clipMin.y};
+         const double maximum[2] = {clipMax.x, clipMax.y};
+
+         double enter = 0.0;
+         double leave = distance - iconRadius - 2.f;
+         bool visible = clipMin.x < clipMax.x && clipMin.y < clipMax.y;
+
+         for (int axis = 0; axis < 2 && visible; ++axis)
+         {
+            if (direction[axis] == 0.0)
+            {
+               visible = origin[axis] >= minimum[axis] && origin[axis] <= maximum[axis];
+               continue;
+            }
+            double nearDistance = (minimum[axis] - origin[axis]) / direction[axis];
+            double farDistance = (maximum[axis] - origin[axis]) / direction[axis];
+            if (nearDistance > farDistance)
+            {
+               const double swap = nearDistance;
+               nearDistance = farDistance;
+               farDistance = swap;
+            }
+            enter = ImMax(enter, nearDistance);
+            leave = ImMin(leave, farDistance);
+            visible = enter < leave;
+         }
+
+         if (visible)
+         {
+            constexpr double dashLength = 6.0;
+            constexpr double period = 10.0;
+            // Work relative to the clipped start: the loop cost is bounded by
+            // the viewport diagonal, even when the pivot is far offscreen.
+            const double visibleLength = ImMin(leave - enter,
+               std::hypot(static_cast<double>(clipMax.x) - clipMin.x, static_cast<double>(clipMax.y) - clipMin.y));
+
+            const ImVec2 clipped_start(
+               ImClamp(static_cast<float>(origin[0] + direction[0] * enter), clipMin.x, clipMax.x),
+               ImClamp(static_cast<float>(origin[1] + direction[1] * enter), clipMin.y, clipMax.y));
+
+            for (double offset = -std::fmod(enter, period); offset < visibleLength; offset += period)
+            {
+               const double startDistance = ImMax(offset, 0.0);
+               const double endDistance = ImMin(offset + dashLength, visibleLength);
+               if (startDistance >= endDistance)
+                  continue;
+
+               const ImVec2 start(
+                  static_cast<float>(clipped_start.x + direction[0] * startDistance),
+                  static_cast<float>(clipped_start.y + direction[1] * startDistance));
+
+               const ImVec2 end(
+                  static_cast<float>(clipped_start.x + direction[0] * endDistance),
+                  static_cast<float>(clipped_start.y + direction[1] * endDistance));
+
+               drawList->AddLine(start, end, IM_COL32(0, 0, 0, 170), 3.f);
+               drawList->AddLine(start, end, IM_COL32(255, 255, 255, 230), 1.f);
+            }
+         }
+      }
+
+      const ImTextureID texture = radial ? gContext.mStyle.ManipulationIcon : gContext.mStyle.MoveIcon;
+
+      if (texture == 0)
+         return;
+
+      // Keep the native cursor visible when the icon would be clipped.
+      if (mouse.x - iconRadius < gContext.mX ||
+          mouse.y - iconRadius < gContext.mY ||
+          mouse.x + iconRadius > gContext.mXMax ||
+          mouse.y + iconRadius > gContext.mYMax)
+      {
+         return;
+      }
+
+      // ManipulateIcon.png points diagonally NE/SW in its original image.
+      const float angle = radial && distance > FLT_EPSILON ? float(std::atan2(deltaY, deltaX)) + ZPI * 0.25f + (IsRotateType(type) ? ZPI * 0.5f : 0.f) : 0.f;
+
+      const float cosine = cosf(angle);
+      const float sine = sinf(angle);
+
+      const ImVec2 offsets[4] = {
+         ImVec2(-halfSize, -halfSize),
+         ImVec2( halfSize, -halfSize),
+         ImVec2( halfSize,  halfSize),
+         ImVec2(-halfSize,  halfSize)
+      };
+
+      ImVec2 corners[4];
+      for (int vertex = 0; vertex < 4; ++vertex)
+      {
+         const ImVec2 offset = offsets[vertex];
+         corners[vertex] = mouse + ImVec2(offset.x * cosine - offset.y * sine, offset.x * sine + offset.y * cosine);
+      }
+
+      constexpr ImVec2 shadow(1.f, 1.f);
+
+      drawList->AddImageQuad(
+         texture,
+         corners[0] + shadow, corners[1] + shadow,
+         corners[2] + shadow, corners[3] + shadow,
+         ImVec2(0, 0), ImVec2(1, 0),
+         ImVec2(1, 1), ImVec2(0, 1),
+         IM_COL32(0, 0, 0, 200));
+
+      drawList->AddImageQuad(texture, corners[0], corners[1], corners[2], corners[3]);
+
+      ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+   }
+
    bool Manipulate(const float* view, const float* projection, OPERATION operation, MODE mode, float* matrix, float* deltaMatrix, const float* snap, const float* localBounds, const float* boundsSnap, const float* rotationSnap, const float* scaleSnap)
    {
       gContext.mDrawList->PushClipRect (ImVec2 (gContext.mX, gContext.mY), ImVec2 (gContext.mX + gContext.mWidth, gContext.mY + gContext.mHeight), false);
@@ -2880,7 +3037,7 @@ namespace IMGUIZMO_NAMESPACE
       // set delta to identity
       if (deltaMatrix)
       {
-         ((matrix_t*)deltaMatrix)->SetToIdentity();
+         reinterpret_cast<matrix_t*>(deltaMatrix)->SetToIdentity();
       }
 
       // behind camera
@@ -2917,6 +3074,7 @@ namespace IMGUIZMO_NAMESPACE
          DrawTranslationGizmo(operation, type);
          DrawScaleGizmo(operation, type);
          DrawScaleUniveralGizmo(operation, type);
+         DrawManipulationFeedback();
       }
 
       gContext.mDrawList->PopClipRect ();

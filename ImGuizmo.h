@@ -302,6 +302,10 @@ namespace IMGUIZMO_NAMESPACE
       float CenterCircleSize;           // Size of circle at the center of the translate/scale gizmo
 
       ImVec4 Colors[COLOR::COUNT];
+
+      ImTextureID ManipulationIcon = 0;
+      ImTextureID MoveIcon = 0;
+      float ManipulationIconSize = 28.0f;
    };
 
    IMGUI_API Style& GetStyle();
